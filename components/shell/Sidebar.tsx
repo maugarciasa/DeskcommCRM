@@ -243,6 +243,7 @@ export function SidebarContent({
                       <li key={item.href}>
                         <Link
                           href={item.href}
+                          prefetch={true}
                           title={collapsed ? t(item.label) : undefined}
                           aria-current={isActive ? "page" : undefined}
                           onClick={onNavigate}
@@ -269,6 +270,7 @@ export function SidebarContent({
                     <li>
                       <Link
                         href={group.hub.href}
+                        prefetch={true}
                         title={collapsed ? t(group.hub.label) : undefined}
                         aria-current={pathname === group.hub.href ? "page" : undefined}
                         onClick={onNavigate}
@@ -295,6 +297,7 @@ export function SidebarContent({
         {rodape && (
           <Link
             href={rodape.href}
+            prefetch={true}
             title={collapsed ? t(rodape.label) : undefined}
             aria-current={pathname.startsWith(rodape.href) ? "page" : undefined}
             onClick={onNavigate}

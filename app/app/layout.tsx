@@ -54,13 +54,34 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   // EPIC-02: gate /app/* on completed onboarding.
   // EPIC-11: gate /app/* on org not being suspended (S-11.08).
+  let conexoesCaidas: ConexaoCaida[] = [];
+  let enrolled = false;
+  let needsMfaGate = false;
+
   if (activeOrg) {
     const admin = createAdminClient();
-    const { data: orgRow } = await admin
-      .from("organizations")
-      .select("onboarded_at, status, settings")
-      .eq("id", activeOrg.orgId)
-      .maybeSingle();
+    // Consultas essenciais da organização e MFA disparadas em paralelo para cortar latência na troca de abas:
+    const [orgRes, conexoes, isEnrolled, mfaRequired] = await Promise.all([
+      admin
+        .from("organizations")
+        .select("onboarded_at, status, settings")
+        .eq("id", activeOrg.orgId)
+        .maybeSingle(),
+      listarConexoesCaidas(admin, activeOrg.orgId),
+      isMfaEnrolled(),
+      requiresMfa(
+        activeOrg.role,
+        user.is_platform_admin,
+        user.id,
+        activeOrg.orgId,
+      ),
+    ]);
+
+    const orgRow = orgRes.data;
+    conexoesCaidas = conexoes;
+    enrolled = isEnrolled;
+    needsMfaGate = mfaRequired;
+
     if (orgRow && !orgRow.onboarded_at && !user.support) redirect("/onboarding");
     if (orgRow?.status === "suspended") redirect("/account-suspended");
     // G4-02: expõe visibility_mode ao client (inbox decide visões visíveis).
@@ -99,17 +120,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // como se cria uma regressão invisível. E, com o logo no mesmo objeto, uma
     // condição só (a do nome) faria a organização que definiu apenas a cor
     // arrastar junto um `logoUrl` que ela não escolheu.
-    //
-    // `origens` é a resposta de `primeiroDefinido` (`lib/branding/resolve.ts`),
-    // que ignora valor vazio e desce: quando ele diz "organizacao", o valor é
-    // não-vazio e já veio trimado — por isso a barra lateral nunca recebe `""`
-    // desta origem.
-    //
-    // `origens.logoUrl === "organizacao"` passou a ser ALCANÇÁVEL na onda do
-    // upload: `camadaDaOrganizacao` declara o logo a partir de
-    // `settings.branding.logo_path`. A condição foi escrita aqui uma onda ANTES
-    // do produtor existir, de propósito — foi o que fez o upload por organização
-    // ser só a camada, sem mais uma passada pela casca inteira.
     const marcaDoTenant = {
       ...(marca.origens.nome === "organizacao" ? { nome: marca.name } : {}),
       ...(marca.origens.logoUrl === "organizacao" && marca.logoUrl !== null
@@ -119,16 +129,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     if (Object.keys(marcaDoTenant).length > 0) {
       activeOrg = { ...activeOrg, marca: marcaDoTenant };
     }
+  } else {
+    const [isEnrolled, mfaRequired] = await Promise.all([
+      isMfaEnrolled(),
+      requiresMfa(undefined, user.is_platform_admin, user.id, undefined),
+    ]);
+    enrolled = isEnrolled;
+    needsMfaGate = mfaRequired;
   }
-
-  // A conexão caiu? A consulta mora no seam (`lib/channels/health`), não aqui:
-  // tela que monta o select de `channel_sessions` à mão foi o que deixou três
-  // seletores oferecendo canal arquivado, e o invariante `canais-selecionaveis`
-  // existe por causa disso. De quebra, o filtro de estados fica LITERALMENTE o
-  // mesmo que decide o aviso da Central — duas listas divergiriam com o tempo.
-  const conexoesCaidas: ConexaoCaida[] = activeOrg
-    ? await listarConexoesCaidas(createAdminClient(), activeOrg.orgId)
-    : [];
 
   // Read sidebar collapsed state SSR to avoid flash.
   const store = await cookies();
@@ -139,15 +147,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     expiresAt: user.support.expires_at, accessMode: user.support.access_mode,
   } : null;
 
-  const enrolled = await isMfaEnrolled();
-  // A decisão deixou de ser uma constante de papel: ela lê a política de quem
-  // pode exigir (a plataforma e a empresa). Ver `lib/auth/politica-mfa.ts`.
-  const needsMfaGate = await requiresMfa(
-    activeOrg?.role,
-    user.is_platform_admin,
-    user.id,
-    activeOrg?.orgId,
-  );
   const shell = (
     <VoiceCallProvider>
       <AppShell sidebarCollapsed={collapsed}>{children}</AppShell>
